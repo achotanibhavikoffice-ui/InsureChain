@@ -1,12 +1,14 @@
 const hre = require("hardhat");
 
 async function main() {
-  const [deployer] = await hre.ethers.getSigners();
+  const signers = await hre.ethers.getSigners();
+  const deployer = signers[9];
+  if (!deployer) throw new Error("Hardhat account #9 is unavailable.");
   console.log("Deploying contracts with the account:", deployer.address);
 
   // 1. Deploy the Groth16Verifier contract generated during setup
   console.log("Deploying Groth16Verifier...");
-  const Verifier = await hre.ethers.getContractFactory("Groth16Verifier");
+  const Verifier = await hre.ethers.getContractFactory("Groth16Verifier", deployer);
   const verifier = await Verifier.deploy();
   await verifier.waitForDeployment();
   const verifierAddress = await verifier.getAddress();
@@ -14,7 +16,7 @@ async function main() {
 
   // 2. Deploy the LifeInsurancePolicy contract using the deployed verifier address
   console.log("Deploying LifeInsurancePolicy...");
-  const LifeInsurancePolicy = await hre.ethers.getContractFactory("LifeInsurancePolicy");
+  const LifeInsurancePolicy = await hre.ethers.getContractFactory("LifeInsurancePolicy", deployer);
   const policy = await LifeInsurancePolicy.deploy(verifierAddress);
   await policy.waitForDeployment();
   const policyAddress = await policy.getAddress();

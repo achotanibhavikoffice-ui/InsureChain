@@ -92,7 +92,7 @@ In MetaMask, open the network selector, select **Add network** and then **Add a 
 | Currency symbol    | `ETH`                   |
 | Block explorer URL | Leave blank             |
 
-Save and switch to this network. Then import one of the local test accounts shown by `hardhat node`: in MetaMask, choose **Add account** → **Import account**, and paste that account's private key. Use these predictable test keys only on the local chain. Never use them for real funds or import your real wallet's recovery phrase into a development tool.
+Save and switch to this network. In MetaMask, choose **Add account**, then **Import account**, and import Hardhat **Account #9** using its private key from the local `hardhat node` output. Confirm the imported address matches Account #9, then connect that account in InsureChain. This is a public development key: use it only on this local chain and never on a public network or with real funds.
 
 ## 8. Start the backend
 
