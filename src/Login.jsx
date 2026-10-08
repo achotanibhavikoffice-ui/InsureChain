@@ -13,7 +13,7 @@ export default function Login({ setView, onLoginSuccess, onHome }) {
       const response = await fetch("http://localhost:3000/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ aadhaarNumber, dob }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Invalid credentials");
-      localStorage.setItem("authToken", data.token); onLoginSuccess();
+      localStorage.setItem("authToken", data.token); onLoginSuccess({ aadhaarNumber, dob });
     } catch (err) { setError(err.message || "Unable to reach authentication server"); }
     finally { setBusy(false); }
   };

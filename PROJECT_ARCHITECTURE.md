@@ -18,8 +18,8 @@ The circuit exposes four public signals in verifier order: `eligible`, `minIncom
 ## 4. On-chain verifier
 `Groth16Verifier.sol` is generated from the exact final zkey using snarkjs. `LifeInsurancePolicy.sol` calls this verifier.
 
-## 5. Automatic activation
-When the verifier returns true, `LifeInsurancePolicy.submitEligibilityProof()` changes the policy status to `Active` and emits `PolicyActivated`.
+## 5. Demo premium gate
+After a valid proof, the contract marks the policy PaymentDue. The holder then confirms a simulated first-premium action. That local demo transaction transfers no funds and changes the policy status to Active.
 
 ## 6. Disbursement extension
 The second flow can use a similar pattern:

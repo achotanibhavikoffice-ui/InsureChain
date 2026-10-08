@@ -12,7 +12,7 @@ const journey = [
   [BadgeCheck, "Verify your policy", "Submit the proof for smart-contract verification."],
 ];
 
-export default function DashboardOverview({ account, wrongNetwork, networkError, onSwitchNetwork, onStart, onLogout, userPolicies = [], policiesLoading = false, policiesError = "" }) {
+export default function DashboardOverview({ account, wrongNetwork, networkError, onSwitchNetwork, onStart, onPayPremium, onLogout, userPolicies = [], policiesLoading = false, policiesError = "" }) {
   const shortened = account ? `${account.slice(0, 6)}…${account.slice(-4)}` : "Wallet connected";
   return (
     <div className="dashboard-shell overview-shell">
@@ -28,9 +28,21 @@ export default function DashboardOverview({ account, wrongNetwork, networkError,
         <section className="my-policies-section" aria-labelledby="my-policies-title">
           <div className="my-policies-heading"><div><span className="eyebrow section-eyebrow">YOUR WALLET RECORDS</span><h2 id="my-policies-title">My InsureChain policy records</h2><p>Eligibility records and their on-chain status for this connected wallet.</p></div><span className="provider-count">{userPolicies.length} {userPolicies.length === 1 ? "RECORD" : "RECORDS"}</span></div>
           {policiesLoading ? <div className="my-policies-empty">Loading policy records from the local network…</div> : policiesError ? <div className="my-policies-empty policy-load-error">{policiesError}</div> : userPolicies.length ? <div className="my-policies-grid">{userPolicies.map((policy) => <article className="owned-policy-card" key={policy.id}>
-            <div className="owned-policy-top"><span className="provider-monogram" style={{ "--provider-accent": policy.accent || "#526aca", "--provider-soft": policy.soft || "#eff2ff" }}>{policy.initials || "ZKP"}</span><span className={`owned-policy-status status-${policy.status.toLowerCase()}`}>{policy.status}</span></div>
+            <div className="owned-policy-top"><span className="provider-monogram" style={{ "--provider-accent": policy.accent || "#526aca", "--provider-soft": policy.soft || "#eff2ff" }}>{policy.initials || "ZKP"}</span><span className={`owned-policy-status status-${policy.status.toLowerCase()}`}>{policy.status === "PaymentDue" ? "Payment Due" : policy.status}</span></div>
             <h3>{policy.providerName}</h3><span className="owned-policy-plan-label">DEMO PLAN SELECTED</span><strong>{policy.planName}</strong><p>InsureChain policy #{policy.id}{policy.createdAt ? ` · Created ${new Date(policy.createdAt * 1000).toLocaleDateString()}` : ""}</p>
             <div className="owned-policy-thresholds"><span>Income ≥ {policy.minIncome}</span><span>Credit ≥ {policy.minCreditScore}</span><span>Medical risk ≤ {policy.maxMedicalRisk}</span></div>
+            {policy.status === "PaymentDue" && <button className="button button-primary button-small payment-due-button" onClick={() => onPayPremium?.(policy.id)}>Pay demo premium to activate</button>}
+            {policy.customerDetails && <details className="policy-customer-details" open>
+              <summary>Customer details</summary>
+              <dl>
+                <div><dt>Name</dt><dd>{policy.customerDetails.name}</dd></div>
+                <div><dt>Mobile</dt><dd>{policy.customerDetails.mobile}</dd></div>
+                <div><dt>Email</dt><dd>{policy.customerDetails.email}</dd></div>
+                <div><dt>Address</dt><dd>{policy.customerDetails.address}</dd></div>
+                <div><dt>Aadhaar</dt><dd>{policy.customerDetails.aadhaarNumber}</dd></div>
+                <div><dt>Date of birth</dt><dd>{policy.customerDetails.dob}</dd></div>
+              </dl>
+            </details>}
             <details className="policy-terms-details">
               <summary>{policy.termsAcceptedAt ? `Plan terms accepted ${new Date(policy.termsAcceptedAt).toLocaleString()}` : "Terms acceptance not recorded"}</summary>
               {policy.acceptedTerms?.length ? <ul>{policy.acceptedTerms.map((term, index) => <li key={`${policy.id}-term-${index}`}>{term}</li>)}</ul> : <p>No terms acknowledgement is saved for this policy record.</p>}

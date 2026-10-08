@@ -47,7 +47,7 @@
 
 **InsureChain** is a decentralized application (DApp) that automates **life insurance policy onboarding and disbursement** using **smart contracts** and **Zero-Knowledge Proofs (ZKPs)**.
 
-Applicants prove that they satisfy a policy's financial and health eligibility thresholds **without ever disclosing the underlying sensitive records** — income, credit score, or medical risk — to the insurer or to the public blockchain. Proofs are generated **client-side** using **Circom** circuits and the **Groth16** proving system, then verified **on-chain** on Ethereum, which triggers automatic policy activation.
+Applicants prove that they satisfy a policy's financial and health eligibility thresholds **without ever disclosing the underlying sensitive records** — income, credit score, or medical risk — to the insurer or to the public blockchain. Proofs are generated **client-side** using **Circom** circuits and the **Groth16** proving system, then verified on the configured chain. A simulated first-premium confirmation activates the demo policy; it does not charge or transfer money.
 
 > **In one sentence:** InsureChain replaces document-heavy, trust-based underwriting with cryptographic proof — verifiable by anyone, readable by no one.
 
@@ -95,7 +95,7 @@ The smart contract learns only **one fact**: *"this wallet satisfies the policy 
 - 🔐 **Zero-knowledge eligibility proofs** — income, credit score, and medical risk remain private inputs
 - 🧮 **Client-side proving** — sensitive data never leaves the applicant's browser
 - ⛓️ **On-chain verification** — Groth16 verifier contract generated from the circuit's own proving key
-- ⚡ **Automatic policy activation** — a valid proof moves the policy to `Active` and emits `PolicyActivated`
+- **Demo first-premium gate** - proof validation sets PaymentDue; a simulated payment click activates the policy without transferring funds.
 - 🦊 **MetaMask integration** — wallet address serves as the policyholder identity
 - 🌐 **Sepolia network handling** — built-in network detection and switching
 - 🧪 **Reproducible ZKP pipeline** — one-command scripts for setup, proving, and verification
@@ -125,7 +125,10 @@ sequenceDiagram
     C->>V: verifyProof(π, publicSignals)
     V-->>C: true / false
     alt Proof valid
-        C-->>A: Status → Active, emit PolicyActivated
+        C-->>A: Status -> PaymentDue
+        A->>UI: Click Pay demo premium
+        UI->>C: payFirstPremium(policyId)
+        C-->>A: Status -> Active, emit PolicyActivated
     else Proof invalid
         C-->>A: Transaction reverts
     end
@@ -206,7 +209,7 @@ medicalRisk   ≤ maxMedicalRisk
 
 | Event | Emitted when |
 |---|---|
-| `PolicyActivated` | A valid eligibility proof is accepted and the policy becomes `Active` |
+| PolicyActivated | The simulated first-premium action is recorded and the policy becomes Active |
 
 ---
 
