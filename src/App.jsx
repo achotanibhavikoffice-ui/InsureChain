@@ -30,31 +30,64 @@ const STEPS = [
 ];
 
 const INITIAL_FORM_DATA = {
-  income: "85000",
+  panNumber: "",
+  income: "",
+  heightCm: "",
+  weightKg: "",
+  chronicConditions: [],
+  criticalIllnesses: [],
   creditScore: "750",
-  medicalRisk: "25",
+  medicalRisk: "0",
   minIncome: "50000",
   minCreditScore: "650",
-  maxMedicalRisk: "40",
+  maxMedicalRisk: "100",
 };
 
+function calculateBmi(heightCm, weightKg) {
+  const height = Number(heightCm);
+  const weight = Number(weightKg);
+  if (!height || !weight) return null;
+  return weight / ((height / 100) ** 2);
+}
+
+function calculateDemoMedicalRisk(data) {
+  const bmi = calculateBmi(data.heightCm, data.weightKg);
+  const chronicCount = (data.chronicConditions || []).filter((item) => item !== "None").length;
+  const criticalCount = (data.criticalIllnesses || []).filter((item) => item !== "None").length;
+  const bmiPoints = bmi !== null && (bmi < 18.5 || bmi >= 30) ? 10 : 0;
+  return Math.min(100, 10 + bmiPoints + chronicCount * 4 + criticalCount * 6);
+}
+
+function buildProofInput(data) {
+  return { ...data, creditScore: "750", medicalRisk: String(calculateDemoMedicalRisk(data)) };
+}
+
 function validateEligibilityInput(data) {
+  if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(data.panNumber || "")) {
+    return "Enter a valid 10-character PAN number from the Form 16 declaration.";
+  }
+  const height = Number(data.heightCm);
+  const weight = Number(data.weightKg);
+  if (!Number.isFinite(height) || height < 50 || height > 250) return "Enter a height between 50 and 250 cm.";
+  if (!Number.isFinite(weight) || weight < 10 || weight > 500) return "Enter a weight between 10 and 500 kg.";
+  if (!(data.chronicConditions || []).length) return "Select a chronic condition or choose None.";
+  if (!(data.criticalIllnesses || []).length) return "Select an illness history item or choose None.";
+
+  const proofInput = buildProofInput(data);
   const ranges = {
     income: 64, minIncome: 64,
     creditScore: 16, minCreditScore: 16,
     medicalRisk: 16, maxMedicalRisk: 16,
   };
-
   for (const [field, bits] of Object.entries(ranges)) {
-    if (!/^\d+$/.test(data[field])) return `${field} must be a whole number greater than or equal to zero.`;
-    if (BigInt(data[field]) >= 2n ** BigInt(bits)) return `${field} is outside the supported range.`;
+    if (!/^[0-9]+$/.test(String(proofInput[field]))) return field + " must be a whole number greater than or equal to zero.";
+    if (BigInt(proofInput[field]) >= 2n ** BigInt(bits)) return field + " is outside the supported range.";
   }
-  if (BigInt(data.income) < BigInt(data.minIncome)) return "Annual income must meet the minimum income threshold to generate a proof.";
-  if (BigInt(data.creditScore) < BigInt(data.minCreditScore)) return "Credit score must meet the minimum credit threshold to generate a proof.";
-  if (BigInt(data.medicalRisk) > BigInt(data.maxMedicalRisk)) return "Medical risk must be at or below the maximum threshold to generate a proof.";
+  if (BigInt(proofInput.income) < BigInt(proofInput.minIncome)) return "Annual income must meet the demo minimum of INR 50,000.";
+  if (BigInt(proofInput.creditScore) < BigInt(proofInput.minCreditScore)) return "The internal demo credit score does not meet the demo threshold.";
+  if (BigInt(proofInput.medicalRisk) > BigInt(proofInput.maxMedicalRisk)) return "The calculated demo medical-risk score is above the configured threshold.";
   return "";
 }
-
 function shorten(address) {
   return address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "";
 }
@@ -71,6 +104,9 @@ function policyMetadataKey(chain, holder, id) {
 function App() {
   // --- WEB2 AUTHENTICATION STATE ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loginIdentity, setLoginIdentity] = useState({ aadhaarNumber: "", dob: "" });
+  const [customerDetails, setCustomerDetails] = useState({ name: "", mobile: "", email: "", address: "", aadhaarNumber: "", dob: "" });
+  const [showCustomerDetails, setShowCustomerDetails] = useState(false);
   const [currentView, setCurrentView] = useState("home");
   const [dashboardView, setDashboardView] = useState("overview");
   const [selectedProvider, setSelectedProvider] = useState("");
@@ -95,6 +131,11 @@ function App() {
 
   const [records, setRecords] = useState({ financial: false, medical: false });
   const [verified, setVerified] = useState(false);
+  const [premiumPaid, setPremiumPaid] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentBusy, setPaymentBusy] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
+  const [paymentTxHash, setPaymentTxHash] = useState("");
   const [zkpBusy, setZkpBusy] = useState(false);
   const [realZkpError, setRealZkpError] = useState("");
 
@@ -125,6 +166,11 @@ function App() {
     setFormData(INITIAL_FORM_DATA);
     setRecords({ financial: false, medical: false });
     setVerified(false);
+    setPremiumPaid(false);
+    setShowPaymentModal(false);
+    setPaymentBusy(false);
+    setPaymentError("");
+    setPaymentTxHash("");
     setZkpBusy(false);
     setRealZkpError("");
     setZkpData(null);
@@ -132,11 +178,16 @@ function App() {
     setPolicyTxHash("");
     setTxHash("");
     setPolicyId("");
+    setShowCustomerDetails(false);
   }
 
   // --- 1. CHECK FOR SAVED WEB2 LOGIN ON LOAD ---
   useEffect(() => {
     const token = localStorage.getItem("authToken");
+    const savedIdentity = localStorage.getItem("insurechain:login-identity");
+    if (savedIdentity) {
+      try { setLoginIdentity(JSON.parse(savedIdentity)); } catch { localStorage.removeItem("insurechain:login-identity"); }
+    }
     if (token) {
       setIsAuthenticated(true);
     }
@@ -186,7 +237,7 @@ function App() {
             initials: selectedPlan?.initials,
             accent: selectedPlan?.accent,
             soft: selectedPlan?.soft,
-            status: statusNumber === 2 ? "Verified" : statusNumber === 1 ? "Pending" : statusNumber === 3 ? "Rejected" : "Unknown",
+            status: statusNumber === 3 ? "Active" : statusNumber === 2 ? "PaymentDue" : statusNumber === 1 ? "Pending" : statusNumber === 4 ? "Rejected" : "Unknown",
             createdAt: Number(record.createdAt),
             minIncome: record.minIncome.toString(),
             minCreditScore: record.minCreditScore.toString(),
@@ -195,6 +246,7 @@ function App() {
             termsAcceptedAt: metadata.termsAcceptedAt || "",
             acceptedTerms: Array.isArray(metadata.acceptedTerms) ? metadata.acceptedTerms : [],
             termsSourceUrl: metadata.termsSourceUrl || selectedPlan?.termsSourceUrl || "",
+            customerDetails: metadata.customerDetails || null,
           };
         }));
         policies.sort((a, b) => BigInt(a.id) === BigInt(b.id) ? 0 : BigInt(a.id) > BigInt(b.id) ? -1 : 1);
@@ -319,6 +371,9 @@ function App() {
     resetWorkflow();
     
     localStorage.removeItem("authToken");
+    localStorage.removeItem("insurechain:login-identity");
+    setLoginIdentity({ aadhaarNumber: "", dob: "" });
+    setCustomerDetails({ name: "", mobile: "", email: "", address: "", aadhaarNumber: "", dob: "" });
     setIsAuthenticated(false);
     setCurrentView("login");
   }
@@ -327,6 +382,22 @@ function App() {
     resetWorkflow();
     setSelectedProvider(providerId);
     setDashboardView("onboarding");
+  }
+
+  function openCustomerDetails() {
+    setCustomerDetails((previous) => ({ ...previous, aadhaarNumber: loginIdentity.aadhaarNumber || previous.aadhaarNumber, dob: loginIdentity.dob || previous.dob }));
+    setShowCustomerDetails(true);
+  }
+
+  function handleCustomerDetailsChange(event) {
+    const { name, value } = event.target;
+    setCustomerDetails((previous) => ({ ...previous, [name]: value }));
+  }
+
+  function continueToDataInput(event) {
+    event.preventDefault();
+    setShowCustomerDetails(false);
+    setStep(2);
   }
 
   function openTermsReview() {
@@ -365,6 +436,7 @@ function App() {
         termsAcceptedAt: acceptance?.providerId === provider.id ? acceptance.acceptedAt : "",
         acceptedTerms: acceptance?.providerId === provider.id ? acceptance.terms : [],
         termsSourceUrl: acceptance?.providerId === provider.id ? acceptance.sourceUrl : provider.termsSourceUrl,
+        customerDetails,
       }));
     } catch {
       // The on-chain policy remains visible even if this browser cannot store
@@ -372,8 +444,7 @@ function App() {
     }
   }
 
-  function handleInputChange(e) {
-    setFormData((previous) => ({ ...previous, [e.target.name]: e.target.value }));
+  function invalidateGeneratedProof() {
     setRealZkpError("");
     setZkpData(null);
     setZkpHash("");
@@ -383,10 +454,36 @@ function App() {
     setVerified(false);
   }
 
+  function handleInputChange(event) {
+    setFormData((previous) => ({ ...previous, [event.target.name]: event.target.value }));
+    invalidateGeneratedProof();
+  }
+
+  function handlePanChange(event) {
+    const panNumber = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
+    setFormData((previous) => ({ ...previous, panNumber }));
+    invalidateGeneratedProof();
+  }
+
+  function toggleDeclarationItem(group, item) {
+    setFormData((previous) => {
+      const current = previous[group] || [];
+      const withoutNone = current.filter((value) => value !== "None");
+      const next = item === "None"
+        ? (current.includes("None") ? [] : ["None"])
+        : current.includes(item)
+          ? withoutNone.filter((value) => value !== item)
+          : [...withoutNone, item];
+      return { ...previous, [group]: next };
+    });
+    invalidateGeneratedProof();
+  }
+
   // --- GENERATE ZKP & HASH CODE FROM HEALTH AND FINANCIAL RECORDS ---
   async function processDataCollection() {
     if (operationActive.current) return;
     setRealZkpError("");
+    const proofInput = buildProofInput(formData);
     const validationError = validateEligibilityInput(formData);
     if (validationError) {
       setRealZkpError(validationError);
@@ -409,8 +506,8 @@ function App() {
 
       const circuitInput = {
         income: String(formData.income),
-        creditScore: String(formData.creditScore),
-        medicalRisk: String(formData.medicalRisk),
+        creditScore: String(proofInput.creditScore),
+        medicalRisk: String(proofInput.medicalRisk),
         minIncome: String(formData.minIncome),
         minCreditScore: String(formData.minCreditScore),
         maxMedicalRisk: String(formData.maxMedicalRisk)
@@ -478,10 +575,13 @@ function App() {
         const snarkjs = await import("snarkjs");
         const wasmUrl = "/zkp/LifeInsuranceEligibility.wasm";
         const zkeyUrl = "/zkp/LifeInsuranceEligibility_final.zkey";
+        const validationError = validateEligibilityInput(formData);
+        if (validationError) throw new Error(validationError);
+        const proofInput = buildProofInput(formData);
         const circuitInput = {
           income: String(formData.income),
-          creditScore: String(formData.creditScore),
-          medicalRisk: String(formData.medicalRisk),
+          creditScore: String(proofInput.creditScore),
+          medicalRisk: String(proofInput.medicalRisk),
           minIncome: String(formData.minIncome),
           minCreditScore: String(formData.minCreditScore),
           maxMedicalRisk: String(formData.maxMedicalRisk)
@@ -502,6 +602,7 @@ function App() {
       const abi = [
         "function createPolicy(uint256,uint256,uint256) external returns (uint256)",
         "function submitEligibilityProof(uint256,uint256[2],uint256[2][2],uint256[2],uint256[4]) external",
+        "function payFirstPremium(uint256) external",
         "function getPolicyIds(address holder) view returns (uint256[])",
         "function policies(uint256 policyId) view returns (address holder,uint256 createdAt,uint256 activatedAt,uint256 minIncome,uint256 minCreditScore,uint256 maxMedicalRisk,uint8 status)",
         "event PolicyCreated(uint256 indexed policyId, address indexed holder, uint256 minIncome, uint256 minCreditScore, uint256 maxMedicalRisk)"
@@ -583,6 +684,7 @@ function App() {
         if (previousReceipt?.status === 1) {
           rememberSelectedPolicy(activePolicyId);
           setVerified(true);
+          setShowPaymentModal(true);
           setPoliciesRefreshVersion((version) => version + 1);
           return;
         }
@@ -598,6 +700,7 @@ function App() {
       if (revision !== workflowRevision.current) return;
       rememberSelectedPolicy(activePolicyId);
       setVerified(true);
+      setShowPaymentModal(true);
       setPoliciesRefreshVersion((version) => version + 1);
     } catch (err) {
       if (revision === workflowRevision.current) {
@@ -611,6 +714,49 @@ function App() {
     }
   }
 
+  async function payFirstPremium(targetPolicyId = policyId) {
+    if (!targetPolicyId || paymentBusy) return;
+    const policyAddress = import.meta.env.VITE_POLICY_CONTRACT_ADDRESS;
+    if (!policyAddress) {
+      setPaymentError("Missing VITE_POLICY_CONTRACT_ADDRESS in environment variables.");
+      return;
+    }
+
+    try {
+      setPaymentError("");
+      setPaymentBusy(true);
+      const activeChainId = await window.ethereum.request({ method: "eth_chainId" });
+      if (BigInt(activeChainId) !== BigInt(configuredChainId)) {
+        throw new Error("Switch MetaMask to chain ID " + configuredChainId + " before confirming the demo payment.");
+      }
+      const provider = new BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      const contract = new Contract(policyAddress, ["function payFirstPremium(uint256) external"], signer);
+      const tx = await contract.payFirstPremium(BigInt(targetPolicyId));
+      setPaymentTxHash(tx.hash);
+      const receipt = await tx.wait();
+      if (receipt?.status !== 1) throw new Error("The demo payment transaction did not complete.");
+      setPremiumPaid(true);
+      setShowPaymentModal(false);
+      setPoliciesRefreshVersion((version) => version + 1);
+    } catch (err) {
+      setPaymentError(err?.shortMessage || err?.message || "Could not record the demo premium payment.");
+    } finally {
+      setPaymentBusy(false);
+    }
+  }
+
+  function resumePremiumPayment(targetPolicyId) {
+    setPolicyId(String(targetPolicyId));
+    setStep(4);
+    setVerified(true);
+    setPremiumPaid(false);
+    setPaymentError("");
+    setPaymentTxHash("");
+    setDashboardView("onboarding");
+    setShowPaymentModal(true);
+  }
+
   // Public home page and account screens.
   if (!isAuthenticated) {
     if (currentView === "home") {
@@ -621,7 +767,11 @@ function App() {
           {currentView === "login" ? (
             <Login 
               setView={setCurrentView} 
-              onLoginSuccess={() => setIsAuthenticated(true)} 
+              onLoginSuccess={(identity) => {
+                setLoginIdentity(identity);
+                localStorage.setItem("insurechain:login-identity", JSON.stringify(identity));
+                setIsAuthenticated(true);
+              }}
               onHome={() => setCurrentView("home")}
             />
           ) : (
@@ -668,7 +818,7 @@ function App() {
   }
 
   if (dashboardView === "overview") {
-    return <DashboardOverview account={account} wrongNetwork={wrongNetwork} networkError={error} onSwitchNetwork={switchToConfiguredNetwork} onStart={startOnboarding} onLogout={disconnect} userPolicies={userPolicies} policiesLoading={policiesLoading} policiesError={policiesError} />;
+    return <DashboardOverview account={account} wrongNetwork={wrongNetwork} networkError={error} onSwitchNetwork={switchToConfiguredNetwork} onStart={startOnboarding} onPayPremium={resumePremiumPayment} onLogout={disconnect} userPolicies={userPolicies} policiesLoading={policiesLoading} policiesError={policiesError} />;
   }
 
   // --- 5. MAIN DASHBOARD ---
@@ -739,8 +889,8 @@ function App() {
                   {INSURANCE_PROVIDERS.map((providerOption) => <option key={providerOption.id} value={providerOption.id}>{providerOption.name} — {providerOption.plan}</option>)}
                 </select>
                 {chosenProvider && <div className="selected-provider-note"><ShieldCheck size={16} /><span>Selected plan: <strong>{chosenProvider.name} · {chosenProvider.plan}</strong>. The on-chain demo records eligibility thresholds and verification status; it does not buy this insurer’s policy.</span></div>}
-                <button className="primary-btn" disabled={!chosenProvider || zkpBusy} onClick={() => setStep(2)}>
-                  Proceed to Data Input <ArrowRight size={18} />
+                <button className="primary-btn" disabled={!chosenProvider || zkpBusy} onClick={openCustomerDetails}>
+                  Enter Customer Details <ArrowRight size={18} />
                 </button>
               </div>
             )}
@@ -748,38 +898,51 @@ function App() {
             {step === 2 && (
               <div className="panel-content">
                 <button className="panel-back" onClick={() => setStep(1)}><ArrowLeft size={15}/> Back to policy overview</button>
-                <h2>Health & Financial Records Input</h2>
-                <p>Enter your private health and financial records. These values are processed locally in your browser to build the ZKP witness and generate your proof hash.</p>
-                
-                <div className="eligibility-input-grid">
-                  <div>
-                    <label className="onboarding-label">Annual Income ($)</label>
-                    <input className="onboarding-input" name="income" type="number" min="0" step="1" required disabled={zkpBusy} value={formData.income} onChange={handleInputChange} />
-                  </div>
-                  <div>
-                    <label className="onboarding-label">Credit Score</label>
-                    <input className="onboarding-input" name="creditScore" type="number" min="0" step="1" required disabled={zkpBusy} value={formData.creditScore} onChange={handleInputChange} />
-                  </div>
-                  <div>
-                    <label className="onboarding-label">Medical Risk Score</label>
-                    <input className="onboarding-input" name="medicalRisk" type="number" min="0" step="1" required disabled={zkpBusy} value={formData.medicalRisk} onChange={handleInputChange} />
-                  </div>
-                  <div>
-                    <label className="onboarding-label">Min Income Threshold</label>
-                    <input className="onboarding-input" name="minIncome" type="number" min="0" step="1" required disabled={zkpBusy} value={formData.minIncome} onChange={handleInputChange} />
-                  </div>
-                  <div>
-                    <label className="onboarding-label">Min Credit Score Threshold</label>
-                    <input className="onboarding-input" name="minCreditScore" type="number" min="0" step="1" required disabled={zkpBusy} value={formData.minCreditScore} onChange={handleInputChange} />
-                  </div>
-                  <div>
-                    <label className="onboarding-label">Max Medical Risk Threshold</label>
-                    <input className="onboarding-input" name="maxMedicalRisk" type="number" min="0" step="1" required disabled={zkpBusy} value={formData.maxMedicalRisk} onChange={handleInputChange} />
-                  </div>
+                <h2>Income & Medical Self-Declaration</h2>
+                <p>Enter the requested Form 16 and health details honestly. Inputs are processed in this browser for the demo proof; no document or diagnosis is independently verified.</p>
+                <div className="declaration-sections">
+                  <section className="declaration-card" aria-labelledby="form16-title">
+                    <span className="declaration-kicker">PART 1</span>
+                    <h3 id="form16-title">Form 16 income declaration</h3>
+                    <p>Enter the PAN and annual income shown on your Form 16. This demo does not upload or authenticate the document.</p>
+                    <label className="onboarding-label">PAN card number
+                      <input className="onboarding-input" name="panNumber" type="text" autoComplete="off" maxLength="10" pattern="[A-Z]{5}[0-9]{4}[A-Z]" title="Enter a valid 10-character PAN" value={formData.panNumber} onChange={handlePanChange} required disabled={zkpBusy} />
+                    </label>
+                    <label className="onboarding-label">Annual income (INR)
+                      <input className="onboarding-input" name="income" type="number" min="0" step="1" inputMode="numeric" value={formData.income} onChange={handleInputChange} required disabled={zkpBusy} />
+                    </label>
+                    <div className="declaration-note">Demo eligibility rule: income must be at least INR 50,000 per year.</div>
+                  </section>
+                  <section className="declaration-card" aria-labelledby="medical-title">
+                    <span className="declaration-kicker">PART 2</span>
+                    <h3 id="medical-title">Medical health self-declaration</h3>
+                    <p>Declare your health history honestly. This is a demo scoring rule, not medical advice or insurer underwriting.</p>
+                    <div className="declaration-vitals">
+                      <label className="onboarding-label">Height (cm)
+                        <input className="onboarding-input" name="heightCm" type="number" min="50" max="250" step="0.1" value={formData.heightCm} onChange={handleInputChange} required disabled={zkpBusy} />
+                      </label>
+                      <label className="onboarding-label">Weight (kg)
+                        <input className="onboarding-input" name="weightKg" type="number" min="10" max="500" step="0.1" value={formData.weightKg} onChange={handleInputChange} required disabled={zkpBusy} />
+                      </label>
+                    </div>
+                    <div className="bmi-summary"><span>Calculated BMI</span><strong>{calculateBmi(formData.heightCm, formData.weightKg)?.toFixed(1) || "--"}</strong></div>
+                    <fieldset className="declaration-fieldset">
+                      <legend>Pre-existing chronic conditions</legend>
+                      <div className="declaration-options">
+                        {["Diabetes", "Hypertension (high blood pressure)", "Asthma", "Thyroid issues", "High cholesterol", "None"].map((item) => <label className="declaration-option" key={item}><input type="checkbox" checked={formData.chronicConditions.includes(item)} onChange={() => toggleDeclarationItem("chronicConditions", item)} disabled={zkpBusy} /><span>{item}</span></label>)}
+                      </div>
+                    </fieldset>
+                    <fieldset className="declaration-fieldset">
+                      <legend>Critical illness history</legend>
+                      <div className="declaration-options">
+                        {["Heart disease", "Stroke", "Cancer", "Tumours", "Kidney disorders", "Liver problems", "None"].map((item) => <label className="declaration-option" key={item}><input type="checkbox" checked={formData.criticalIllnesses.includes(item)} onChange={() => toggleDeclarationItem("criticalIllnesses", item)} disabled={zkpBusy} /><span>{item}</span></label>)}
+                      </div>
+                    </fieldset>
+                    <div className="bmi-summary medical-risk-summary"><span>Calculated demo medical-risk score</span><strong>{calculateDemoMedicalRisk(formData)} / 100</strong></div>
+                  </section>
                 </div>
-
+                <div className="declaration-disclaimer">The proof checks the entered income and calculated demo risk against demo thresholds. It does not authenticate Form 16, verify PAN, or diagnose conditions; PAN and health declarations are not sent to the contract.</div>
                 {realZkpError && <div className="error-box" style={{ marginBottom: 16 }}><X size={16} /><span>{realZkpError}</span></div>}
-
                 <button className="primary-btn" onClick={processDataCollection} disabled={zkpBusy}>
                   {zkpBusy ? "Generating ZKP Hash..." : "Generate ZKP & Lock Records"} <Fingerprint size={18} />
                 </button>
@@ -851,7 +1014,10 @@ function App() {
                   </div>
                 )}
 
-                {verified && <button className="primary-btn" onClick={() => { setDashboardView("overview"); setPoliciesRefreshVersion((version) => version + 1); }} style={{ marginTop: 16 }}>
+                {verified && !premiumPaid && <button className="primary-btn" onClick={() => setShowPaymentModal(true)} disabled={paymentBusy || wrongNetwork} style={{ marginTop: 16 }}>
+                  {paymentBusy ? "Recording demo payment..." : "Pay first premium & activate policy"} <ArrowRight size={18} />
+                </button>}
+                {verified && premiumPaid && <button className="primary-btn" onClick={() => { setDashboardView("overview"); setPoliciesRefreshVersion((version) => version + 1); }} style={{ marginTop: 16 }}>
                   View my policies <ArrowRight size={18} />
                 </button>}
 
@@ -865,6 +1031,37 @@ function App() {
           </div>
         </section>
       </main>
+      {showCustomerDetails && <div className="terms-modal-backdrop customer-details-backdrop" role="presentation">
+        <section className="terms-modal customer-details-modal" role="dialog" aria-modal="true" aria-labelledby="customer-details-title">
+          <div className="terms-modal-heading"><div><span className="eyebrow section-eyebrow">POLICYHOLDER INFORMATION</span><h2 id="customer-details-title">Customer details</h2><p>These details will be attached to this policy record in this browser.</p></div><button className="terms-modal-close" type="button" aria-label="Close customer details" onClick={() => setShowCustomerDetails(false)}><X size={20}/></button></div>
+          <form onSubmit={continueToDataInput}>
+            <div className="customer-details-form">
+              <div className="customer-details-grid">
+                <label className="onboarding-label">Customer name<input className="onboarding-input" name="name" autoComplete="name" value={customerDetails.name} onChange={handleCustomerDetailsChange} required /></label>
+                <label className="onboarding-label">Mobile number<input className="onboarding-input" name="mobile" type="tel" inputMode="numeric" autoComplete="tel" maxLength="10" pattern="[0-9]{10}" title="Enter a 10-digit mobile number" value={customerDetails.mobile} onChange={(event) => setCustomerDetails((previous) => ({ ...previous, mobile: event.target.value.replace(/\D/g, "").slice(0, 10) }))} required /></label>
+                <label className="onboarding-label">Email ID<input className="onboarding-input" name="email" type="email" autoComplete="email" value={customerDetails.email} onChange={handleCustomerDetailsChange} required /></label>
+                <label className="onboarding-label">Aadhaar number<input className="onboarding-input" name="aadhaarNumber" inputMode="numeric" value={customerDetails.aadhaarNumber} onChange={handleCustomerDetailsChange} readOnly={Boolean(loginIdentity.aadhaarNumber)} maxLength="12" pattern="[0-9]{12}" required /></label>
+                <label className="onboarding-label">Date of birth<input className="onboarding-input" name="dob" type="date" value={customerDetails.dob} onChange={handleCustomerDetailsChange} readOnly={Boolean(loginIdentity.dob)} required /></label>
+                <label className="onboarding-label customer-address-field">Address<textarea className="onboarding-input customer-address-input" name="address" autoComplete="street-address" rows="3" value={customerDetails.address} onChange={handleCustomerDetailsChange} required /></label>
+              </div>
+              <div className="customer-details-privacy"><LockKeyhole size={16}/><span>Aadhaar, date of birth, and contact details are saved in this browser for dashboard display. They are not written to the policy contract or blockchain.</span></div>
+              <div className="terms-modal-actions"><button type="button" className="button button-outline" onClick={() => setShowCustomerDetails(false)}>Cancel</button><button type="submit" className="button button-primary">Continue to Data Input <ArrowRight size={15}/></button></div>
+            </div>
+          </form>
+        </section>
+      </div>}
+      {showPaymentModal && <div className="terms-modal-backdrop payment-modal-backdrop" role="presentation">
+        <section className="terms-modal payment-modal" role="dialog" aria-modal="true" aria-labelledby="payment-modal-title">
+          <div className="terms-modal-heading"><div><span className="eyebrow section-eyebrow">DEMO PAYMENT GATEWAY</span><h2 id="payment-modal-title">Pay the first premium</h2><p>Policy #{policyId || "?"} - simulated payment only</p></div><button className="terms-modal-close" type="button" aria-label="Close payment dialog" onClick={() => setShowPaymentModal(false)} disabled={paymentBusy}><X size={20}/></button></div>
+          <div className="payment-modal-content">
+            <div className="payment-amount-row"><span>First premium</span><strong>0.00 <small>DEMO</small></strong></div>
+            <div className="customer-details-privacy"><ShieldCheck size={16}/><span>This is a dummy payment. No real payment is collected. MetaMask will ask you to confirm a local transaction that records the demo payment and activates the policy.</span></div>
+            {paymentError && <div className="error-box" role="alert"><X size={16}/><span>{paymentError}</span></div>}
+            {paymentTxHash && <div className="privacy-callout payment-tx-hash"><ExternalLink size={17}/><div><strong>Demo payment transaction:</strong><span>{paymentTxHash}</span></div></div>}
+            <div className="terms-modal-actions"><button type="button" className="button button-outline" onClick={() => setShowPaymentModal(false)} disabled={paymentBusy}>Pay later</button><button type="button" className="button button-primary" onClick={() => payFirstPremium()} disabled={paymentBusy || wrongNetwork || !policyId}>{paymentBusy ? "Confirming demo payment..." : "Pay demo premium & activate"} <ArrowRight size={15}/></button></div>
+          </div>
+        </section>
+      </div>}
       {showTermsModal && chosenProvider && <div className="terms-modal-backdrop" role="presentation">
         <section className="terms-modal" role="dialog" aria-modal="true" aria-labelledby="terms-modal-title">
           <div className="terms-modal-heading"><div><span className="eyebrow section-eyebrow">REQUIRED BEFORE ZKP ACTIVATION</span><h2 id="terms-modal-title">Review {chosenProvider.name} plan terms</h2><p>{chosenProvider.plan} · {chosenProvider.termsVersion}</p></div><button className="terms-modal-close" type="button" aria-label="Close terms" onClick={() => setShowTermsModal(false)}><X size={20}/></button></div>

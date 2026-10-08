@@ -7,14 +7,14 @@ import "./IZKPVerifier.sol";
  * LifeInsurancePolicy
  *
  * The contract never receives raw financial or medical records.
- * It receives a Groth16 proof plus public signals and activates the policy
- * only when the configured verifier accepts the proof.
+ * It receives a Groth16 proof plus public signals and marks a policy as
+ * payment due after verification. A separate demo-only call activates it.
  *
  * Expected public signals from the supplied circuit, in order:
  * [eligible, minimumIncome, minimumCreditScore, maximumMedicalRisk]
  */
 contract LifeInsurancePolicy {
-    enum Status { None, Pending, Active, Rejected }
+    enum Status { None, Pending, PaymentDue, Active, Rejected }
 
     struct Policy {
         address holder;
@@ -38,6 +38,7 @@ contract LifeInsurancePolicy {
         uint256 minCreditScore,
         uint256 maxMedicalRisk
     );
+    event DemoPremiumPaid(uint256 indexed policyId, address indexed holder);
     event PolicyActivated(uint256 indexed policyId, address indexed holder);
     event PolicyRejected(uint256 indexed policyId, address indexed holder);
 
@@ -87,8 +88,19 @@ contract LifeInsurancePolicy {
             revert("invalid ZK proof");
         }
 
+        policy.status = Status.PaymentDue;
+    }
+
+    /// @notice Records a simulated first-premium payment for the local demo and activates the policy.
+    /// @dev This function transfers no funds and must not be used as real insurance payment handling.
+    function payFirstPremium(uint256 policyId) external {
+        Policy storage policy = policies[policyId];
+        require(policy.holder == msg.sender, "not policy holder");
+        require(policy.status == Status.PaymentDue, "proof not verified or premium already paid");
+
         policy.status = Status.Active;
         policy.activatedAt = block.timestamp;
+        emit DemoPremiumPaid(policyId, msg.sender);
         emit PolicyActivated(policyId, msg.sender);
     }
 
